@@ -63,3 +63,9 @@ class User(Base):
     )
 
     role = relationship("Role", back_populates="users")
+
+    customer = relationship(
+        "Customer",
+        back_populates="user",
+        uselist=False
+    )

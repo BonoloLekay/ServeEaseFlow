@@ -45,7 +45,10 @@ class Customer(Base):
         nullable=False
     )
 
-    user = relationship("User")
+    user = relationship(
+        "User",
+        back_populates="customer"
+    )
 
     vehicles = relationship(
         "Vehicle",
