@@ -8,8 +8,8 @@ class VehicleCreate(BaseModel):
     )
     vin: str | None = Field(
         default=None,
-        min_length=5,
-        max_length=50
+        min_length=17,
+        max_length=17
     )
     make: str = Field(min_length=2, max_length=100)
     model: str = Field(min_length=1, max_length=100)
@@ -28,8 +28,8 @@ class VehicleUpdate(BaseModel):
     )
     vin: str | None = Field(
         default=None,
-        min_length=5,
-        max_length=50
+        min_length=17,
+        max_length=17
     )
     make: str | None = Field(
         default=None,

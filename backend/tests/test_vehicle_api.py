@@ -1,3 +1,4 @@
+
 import uuid
 
 import pytest
@@ -5,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.session import SessionLocal, get_db
-from app.models import User
+
 
 @pytest.fixture
 def db():
@@ -28,7 +29,6 @@ def client(db):
         yield test_client
 
     app.dependency_overrides.clear()
-
 
 
 def create_test_customer(client):
@@ -96,7 +96,7 @@ def test_create_vehicle(client):
 def test_list_customer_vehicles(client):
     customer = create_test_customer(client)
 
-    client.post(
+    creation = client.post(
         "/api/v1/vehicles/",
         headers=customer["headers"],
         json={
@@ -109,6 +109,8 @@ def test_list_customer_vehicles(client):
         }
     )
 
+    assert creation.status_code == 201
+
     response = client.get(
         "/api/v1/vehicles/",
         headers=customer["headers"]
@@ -118,6 +120,7 @@ def test_list_customer_vehicles(client):
     assert len(response.json()) == 1
     assert response.json()[0]["model"] == "X3"
 
+
 def test_update_vehicle(client):
     customer = create_test_customer(client)
 
@@ -126,13 +129,15 @@ def test_update_vehicle(client):
         headers=customer["headers"],
         json={
             "registration_number": f"UPD{uuid.uuid4().hex[:6].upper()}",
-            "vin": f"UPDVIN{uuid.uuid4().hex[:10].upper()}",
+            "vin": f"UPDVINX{uuid.uuid4().hex[:10].upper()}",
             "make": "BMW",
             "model": "320i",
             "year": 2022,
             "colour": "Black"
         }
     )
+
+    assert creation.status_code == 201
 
     vehicle_id = creation.json()["id"]
 
@@ -145,6 +150,7 @@ def test_update_vehicle(client):
     assert response.status_code == 200
     assert response.json()["colour"] == "White"
 
+
 def test_delete_vehicle(client):
     customer = create_test_customer(client)
 
@@ -153,13 +159,15 @@ def test_delete_vehicle(client):
         headers=customer["headers"],
         json={
             "registration_number": f"DEL{uuid.uuid4().hex[:6].upper()}",
-            "vin": f"DELVIN{uuid.uuid4().hex[:10].upper()}",
+            "vin": f"DELVINX{uuid.uuid4().hex[:10].upper()}",
             "make": "BMW",
             "model": "X5",
             "year": 2024,
             "colour": "Black"
         }
     )
+
+    assert creation.status_code == 201
 
     vehicle_id = creation.json()["id"]
 
@@ -177,6 +185,7 @@ def test_delete_vehicle(client):
 
     assert retrieval.status_code == 404
 
+
 def test_customer_cannot_access_another_customers_vehicle(client):
     customer_one = create_test_customer(client)
     customer_two = create_test_customer(client)
@@ -186,13 +195,15 @@ def test_customer_cannot_access_another_customers_vehicle(client):
         headers=customer_one["headers"],
         json={
             "registration_number": f"ISO{uuid.uuid4().hex[:6].upper()}",
-            "vin": f"ISOVIN{uuid.uuid4().hex[:10].upper()}",
+            "vin": f"ISOVINX{uuid.uuid4().hex[:10].upper()}",
             "make": "BMW",
             "model": "M3",
             "year": 2023,
             "colour": "Red"
         }
     )
+
+    assert creation.status_code == 201
 
     vehicle_id = creation.json()["id"]
 
