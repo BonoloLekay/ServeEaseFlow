@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -41,6 +42,7 @@ def get_customer_id(current_user: User) -> int:
 )
 def create_appointment(
     appointment_data: AppointmentCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("CUSTOMER"))
 ):
@@ -53,7 +55,9 @@ def create_appointment(
             vehicle_id=appointment_data.vehicle_id,
             service_category_id=appointment_data.service_category_id,
             scheduled_at=appointment_data.scheduled_at,
-            customer_notes=appointment_data.customer_notes
+            customer_notes=appointment_data.customer_notes,
+            actor_id=current_user.id,
+            ip_address=request.client.host if request.client else None
         )
 
     except ValueError as error:
@@ -112,6 +116,7 @@ def get_appointment(
 def update_appointment(
     appointment_id: int,
     appointment_data: AppointmentUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("CUSTOMER"))
 ):
@@ -142,7 +147,9 @@ def update_appointment(
             vehicle_id=appointment_data.vehicle_id,
             service_category_id=appointment_data.service_category_id,
             scheduled_at=appointment_data.scheduled_at,
-            customer_notes=appointment_data.customer_notes
+            customer_notes=appointment_data.customer_notes,
+            actor_id=current_user.id,
+            ip_address=request.client.host if request.client else None
         )
 
     except ValueError as error:
@@ -158,6 +165,7 @@ def update_appointment(
 )
 def cancel_appointment(
     appointment_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("CUSTOMER"))
 ):
@@ -178,7 +186,9 @@ def cancel_appointment(
     try:
         cancelled_appointment = cancel_customer_appointment(
             db=db,
-            appointment=appointment
+            appointment=appointment,
+            actor_id=current_user.id,
+            ip_address=request.client.host if request.client else None
         )
 
         return {

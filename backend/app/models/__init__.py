@@ -15,6 +15,7 @@ from app.models.invoice import Invoice
 from app.models.payment import Payment
 from app.models.feedback import Feedback
 from app.models.labour_entry import LabourEntry
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "Role",
@@ -34,6 +35,7 @@ __all__ = [
     "Payment",
     "LabourEntry",
     "Feedback",
+    "AuditLog",
 ]
 
 

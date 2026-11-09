@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.session import SessionLocal, get_db
-from app.models import ServiceCategory
+from app.models import AuditLog, ServiceCategory, User
 
 
 @pytest.fixture
@@ -66,6 +66,12 @@ def create_test_customer(client):
             "Authorization": f"Bearer {token}"
         }
     }
+
+
+def get_customer_user(db, customer):
+    return db.query(User).filter(
+        User.email == customer["email"]
+    ).first()
 
 
 def create_test_vehicle(client, customer):
@@ -314,3 +320,94 @@ def test_cancelled_appointment_cannot_be_updated(client, db):
     )
 
     assert response.status_code == 400
+
+
+# --------------------------------------------------
+# AUDIT LOG TESTS
+# --------------------------------------------------
+
+def test_create_appointment_generates_audit_log(client, db):
+    customer = create_test_customer(client)
+    user = get_customer_user(db, customer)
+
+    appointment = create_test_appointment(
+        client,
+        db,
+        customer
+    )
+
+    audit_log = db.query(AuditLog).filter(
+        AuditLog.entity_type == "Appointment",
+        AuditLog.entity_id == str(appointment["id"]),
+        AuditLog.action == "CREATE"
+    ).first()
+
+    assert audit_log is not None
+    assert audit_log.user_id == user.id
+    assert audit_log.new_values["status"] == "PENDING"
+    assert audit_log.new_values["booking_reference"] == appointment["booking_reference"]
+    assert audit_log.ip_address is not None
+
+
+def test_update_appointment_generates_audit_log(client, db):
+    customer = create_test_customer(client)
+    user = get_customer_user(db, customer)
+
+    appointment = create_test_appointment(
+        client,
+        db,
+        customer
+    )
+
+    response = client.put(
+        f"/api/v1/appointments/{appointment['id']}",
+        headers=customer["headers"],
+        json={
+            "scheduled_at": future_appointment_date(days=14)
+        }
+    )
+
+    assert response.status_code == 200
+
+    audit_log = db.query(AuditLog).filter(
+        AuditLog.entity_type == "Appointment",
+        AuditLog.entity_id == str(appointment["id"]),
+        AuditLog.action == "UPDATE"
+    ).first()
+
+    assert audit_log is not None
+    assert audit_log.user_id == user.id
+    assert audit_log.old_values is not None
+    assert audit_log.new_values is not None
+    assert audit_log.old_values["scheduled_at"] != audit_log.new_values["scheduled_at"]
+    assert audit_log.ip_address is not None
+
+
+def test_cancel_appointment_generates_audit_log(client, db):
+    customer = create_test_customer(client)
+    user = get_customer_user(db, customer)
+
+    appointment = create_test_appointment(
+        client,
+        db,
+        customer
+    )
+
+    response = client.delete(
+        f"/api/v1/appointments/{appointment['id']}",
+        headers=customer["headers"]
+    )
+
+    assert response.status_code == 200
+
+    audit_log = db.query(AuditLog).filter(
+        AuditLog.entity_type == "Appointment",
+        AuditLog.entity_id == str(appointment["id"]),
+        AuditLog.action == "CANCEL"
+    ).first()
+
+    assert audit_log is not None
+    assert audit_log.user_id == user.id
+    assert audit_log.old_values["status"] == "PENDING"
+    assert audit_log.new_values["status"] == "CANCELLED"
+    assert audit_log.ip_address is not None

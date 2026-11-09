@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models import Appointment, Vehicle, ServiceCategory
+from app.services.audit_service import create_audit_log
 
 
 def generate_booking_reference(db: Session):
@@ -17,6 +18,18 @@ def generate_booking_reference(db: Session):
 
         if not existing:
             return reference
+
+
+def appointment_snapshot(appointment: Appointment) -> dict:
+    """Return safe appointment fields for audit logging."""
+
+    return {
+        "booking_reference": appointment.booking_reference,
+        "vehicle_id": appointment.vehicle_id,
+        "service_category_id": appointment.service_category_id,
+        "scheduled_at": appointment.scheduled_at.isoformat(),
+        "status": appointment.status,
+    }
 
 
 def get_customer_appointments(
@@ -53,7 +66,9 @@ def create_customer_appointment(
     vehicle_id: int,
     service_category_id: int,
     scheduled_at: datetime,
-    customer_notes: str | None = None
+    customer_notes: str | None = None,
+    actor_id: int | None = None,
+    ip_address: str | None = None
 ):
     vehicle = db.query(Vehicle).filter(
         Vehicle.id == vehicle_id,
@@ -96,6 +111,19 @@ def create_customer_appointment(
 
     try:
         db.add(appointment)
+        db.flush()
+
+        create_audit_log(
+            db,
+            user_id=actor_id,
+            action="CREATE",
+            entity_type="Appointment",
+            entity_id=appointment.id,
+            description="Customer created an appointment.",
+            new_values=appointment_snapshot(appointment),
+            ip_address=ip_address
+        )
+
         db.commit()
         db.refresh(appointment)
 
@@ -112,7 +140,9 @@ def update_customer_appointment(
     vehicle_id: int | None = None,
     service_category_id: int | None = None,
     scheduled_at: datetime | None = None,
-    customer_notes: str | None = None
+    customer_notes: str | None = None,
+    actor_id: int | None = None,
+    ip_address: str | None = None
 ):
     if appointment.job_card is not None:
         raise ValueError(
@@ -123,6 +153,9 @@ def update_customer_appointment(
         raise ValueError(
             "Only pending appointments can be updated."
         )
+
+    # Capture the original state before making changes.
+    old_values = appointment_snapshot(appointment)
 
     if vehicle_id is not None:
         vehicle = db.query(Vehicle).filter(
@@ -135,8 +168,6 @@ def update_customer_appointment(
                 "Vehicle not found or does not belong to this customer."
             )
 
-        appointment.vehicle_id = vehicle_id
-
     if service_category_id is not None:
         service_category = db.query(ServiceCategory).filter(
             ServiceCategory.id == service_category_id,
@@ -147,8 +178,6 @@ def update_customer_appointment(
             raise ValueError(
                 "Service category not found or is inactive."
             )
-
-        appointment.service_category_id = service_category_id
 
     if scheduled_at is not None:
         if scheduled_at.tzinfo is None or scheduled_at.utcoffset() is None:
@@ -161,12 +190,33 @@ def update_customer_appointment(
                 "Appointment must be scheduled for a future date and time."
             )
 
-        appointment.scheduled_at = scheduled_at
-
-    if customer_notes is not None:
-        appointment.customer_notes = customer_notes
-
     try:
+        if vehicle_id is not None:
+            appointment.vehicle_id = vehicle_id
+
+        if service_category_id is not None:
+            appointment.service_category_id = service_category_id
+
+        if scheduled_at is not None:
+            appointment.scheduled_at = scheduled_at
+
+        if customer_notes is not None:
+            appointment.customer_notes = customer_notes
+
+        new_values = appointment_snapshot(appointment)
+
+        create_audit_log(
+            db,
+            user_id=actor_id,
+            action="UPDATE",
+            entity_type="Appointment",
+            entity_id=appointment.id,
+            description="Customer updated an appointment.",
+            old_values=old_values,
+            new_values=new_values,
+            ip_address=ip_address
+        )
+
         db.commit()
         db.refresh(appointment)
 
@@ -179,7 +229,9 @@ def update_customer_appointment(
 
 def cancel_customer_appointment(
     db: Session,
-    appointment: Appointment
+    appointment: Appointment,
+    actor_id: int | None = None,
+    ip_address: str | None = None
 ):
     if appointment.job_card is not None:
         raise ValueError(
@@ -191,8 +243,24 @@ def cancel_customer_appointment(
             "Only pending appointments can be cancelled."
         )
 
+    old_values = appointment_snapshot(appointment)
+
     try:
         appointment.status = "CANCELLED"
+
+        new_values = appointment_snapshot(appointment)
+
+        create_audit_log(
+            db,
+            user_id=actor_id,
+            action="CANCEL",
+            entity_type="Appointment",
+            entity_id=appointment.id,
+            description="Customer cancelled an appointment.",
+            old_values=old_values,
+            new_values=new_values,
+            ip_address=ip_address
+        )
 
         db.commit()
         db.refresh(appointment)
