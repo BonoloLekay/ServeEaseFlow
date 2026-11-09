@@ -47,3 +47,8 @@ class Technician(Base):
         "JobAssignment",
         back_populates="technician"
     )
+
+    labour_entries = relationship(
+        "LabourEntry",
+        back_populates="technician"
+    )

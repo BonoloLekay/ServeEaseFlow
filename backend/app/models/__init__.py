@@ -14,7 +14,7 @@ from app.models.inventory_transaction import InventoryTransaction
 from app.models.invoice import Invoice
 from app.models.payment import Payment
 from app.models.feedback import Feedback
-
+from app.models.labour_entry import LabourEntry
 
 __all__ = [
     "Role",
@@ -32,5 +32,8 @@ __all__ = [
     "InventoryTransaction",
     "Invoice",
     "Payment",
+    "LabourEntry",
     "Feedback",
 ]
+
+

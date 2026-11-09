@@ -101,3 +101,8 @@ class JobCard(Base):
         back_populates="job_card",
         uselist=False
     )
+
+    labour_entries = relationship(
+        "LabourEntry",
+        back_populates="job_card"
+    )
