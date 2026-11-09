@@ -11,6 +11,8 @@ from app.api.v1.endpoints import service_bays
 from app.api.v1.endpoints import parts
 from app.api.v1.endpoints import labour
 from app.api.v1.endpoints import invoices
+from app.api.v1.endpoints import payments
+
 
 api_router = APIRouter()
 
@@ -24,6 +26,8 @@ api_router.include_router(service_bays.router)
 api_router.include_router(parts.router)
 api_router.include_router(labour.router)
 api_router.include_router(invoices.router)
+api_router.include_router(payments.router)
+
 
 @api_router.get("/status")
 def api_status():
