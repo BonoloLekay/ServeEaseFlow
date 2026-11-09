@@ -1,4 +1,6 @@
-
+import hmac
+import requests
+import socket
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -157,6 +159,71 @@ def generate_payfast_signature(
         parameter_string.encode("utf-8")
     ).hexdigest()
 
+def verify_payfast_itn_signature(
+    data: dict[str, str]
+) -> bool:
+    signature = data.get("signature")
+
+    if not signature or not settings.PAYFAST_PASSPHRASE:
+        return False
+
+    signature_data = {
+        key: value
+        for key, value in data.items()
+        if key != "signature"
+    }
+
+    expected_signature = generate_payfast_signature(
+        signature_data,
+        settings.PAYFAST_PASSPHRASE
+    )
+
+    return hmac.compare_digest(
+        signature.lower(),
+        expected_signature.lower()
+    )
+
+
+def validate_payfast_itn(data: dict[str, str]) -> bool:
+    validation_data = {
+        key: value
+        for key, value in data.items()
+        if key != "signature"
+    }
+
+    try:
+        response = requests.post(
+            "https://sandbox.payfast.co.za/eng/query/validate",
+            data=validation_data,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+    except requests.RequestException:
+        return False
+
+    return response.text.strip() == "VALID"
+
+
+def verify_payfast_source_ip(source_ip: str) -> bool:
+    payfast_hosts = [
+        "www.payfast.co.za",
+        "sandbox.payfast.co.za",
+        "w1w.payfast.co.za",
+        "w2w.payfast.co.za",
+    ]
+
+    allowed_ips = set()
+
+    for host in payfast_hosts:
+        try:
+            _, _, addresses = socket.gethostbyname_ex(host)
+            allowed_ips.update(addresses)
+        except socket.gaierror:
+            continue
+
+    return source_ip in allowed_ips
 
 def generate_payfast_checkout(
     db: Session,

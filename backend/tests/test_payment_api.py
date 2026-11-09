@@ -7,8 +7,10 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.session import SessionLocal, get_db
-from app.models import Role, User, Invoice
+from app.models import Role, User
 from app.core.security import hash_password, create_access_token
+from app.services.payment_service import create_pending_payment
+import app.api.v1.endpoints.payments as payment_endpoints
 
 
 @pytest.fixture
@@ -67,7 +69,6 @@ def create_test_staff(db, role_name):
             "Authorization": f"Bearer {token}"
         }
     }
-
 
 
 def create_test_customer(client):
@@ -139,11 +140,9 @@ def create_test_job_card(client, staff):
     return response.json()
 
 
-
 def create_test_invoice(client, staff):
     job_card = create_test_job_card(client, staff)
 
-    # Create a part with a positive selling price.
     part_response = client.post(
         "/api/v1/parts/",
         headers=staff["headers"],
@@ -161,7 +160,6 @@ def create_test_invoice(client, staff):
     assert part_response.status_code == 201
     part = part_response.json()
 
-    # Add the part to the job card.
     usage_response = client.post(
         f"/api/v1/parts/job-cards/{job_card['id']}/usage",
         headers=staff["headers"],
@@ -173,7 +171,6 @@ def create_test_invoice(client, staff):
 
     assert usage_response.status_code == 201
 
-    # Move job card to IN_PROGRESS.
     response = client.patch(
         f"/api/v1/job-cards/{job_card['id']}/status",
         headers=staff["headers"],
@@ -182,7 +179,6 @@ def create_test_invoice(client, staff):
 
     assert response.status_code == 200
 
-    # Complete job card.
     response = client.patch(
         f"/api/v1/job-cards/{job_card['id']}/status",
         headers=staff["headers"],
@@ -191,36 +187,6 @@ def create_test_invoice(client, staff):
 
     assert response.status_code == 200
 
-    # Generate invoice.
-    response = client.post(
-        f"/api/v1/invoices/?job_card_id={job_card['id']}",
-        headers=staff["headers"]
-    )
-
-    assert response.status_code == 201
-    return response.json()
-
-    job_card = create_test_job_card(client, staff)
-
-    # Move job card to IN_PROGRESS.
-    response = client.patch(
-        f"/api/v1/job-cards/{job_card['id']}/status",
-        headers=staff["headers"],
-        json={"status": "IN_PROGRESS"}
-    )
-
-    assert response.status_code == 200
-
-    # Complete job card.
-    response = client.patch(
-        f"/api/v1/job-cards/{job_card['id']}/status",
-        headers=staff["headers"],
-        json={"status": "COMPLETED"}
-    )
-
-    assert response.status_code == 200
-
-    # Generate invoice.
     response = client.post(
         f"/api/v1/invoices/?job_card_id={job_card['id']}",
         headers=staff["headers"]
@@ -313,13 +279,11 @@ def test_duplicate_pending_payment_returns_existing_payment(client, db):
 
     assert first.status_code == 201
     assert second.status_code == 201
-
     assert first.json()["id"] == second.json()["id"]
     assert (
         first.json()["payment_reference"]
         == second.json()["payment_reference"]
     )
-
 
 
 def test_admin_can_list_payments(client, db):
@@ -421,3 +385,307 @@ def test_staff_cannot_view_payments_for_nonexistent_invoice(client, db):
     )
 
     assert response.status_code == 404
+
+
+def create_itn_payload(payment, merchant_id):
+    return {
+        "merchant_id": merchant_id,
+        "m_payment_id": payment.payment_reference,
+        "pf_payment_id": f"PF-{uuid.uuid4().hex[:12]}",
+        "payment_status": "COMPLETE",
+        "amount_gross": f"{payment.amount:.2f}",
+        "signature": "test-signature"
+    }
+
+
+def test_valid_payfast_itn_completes_payment(client, db, monkeypatch):
+    admin = create_test_staff(db, "ADMIN")
+    invoice_data = create_test_invoice(client, admin)
+    payment = create_pending_payment(db, invoice_data["id"])
+
+    payload = create_itn_payload(payment, "TEST-MERCHANT")
+
+    monkeypatch.setattr(
+        payment_endpoints.settings,
+        "PAYFAST_MERCHANT_ID",
+        "TEST-MERCHANT"
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_source_ip",
+        lambda source_ip: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "validate_payfast_itn",
+        lambda data: True
+    )
+
+    response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data=payload
+    )
+
+    db.refresh(payment)
+    db.refresh(payment.invoice)
+
+    assert response.status_code == 200
+    assert payment.status == "COMPLETED"
+    assert payment.payfast_transaction_id == payload["pf_payment_id"]
+    assert payment.paid_at is not None
+    assert payment.invoice.status == "PAID"
+
+
+def test_payfast_itn_rejects_invalid_signature(client, monkeypatch):
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: False
+    )
+
+    response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data={
+            "merchant_id": "TEST-MERCHANT",
+            "m_payment_id": "SE-INVALID123",
+            "payment_status": "COMPLETE",
+            "amount_gross": "253.00",
+            "signature": "invalid-signature"
+        }
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid PayFast signature"
+
+
+def test_payfast_itn_rejects_untrusted_source_ip(client, monkeypatch):
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_source_ip",
+        lambda source_ip: False
+    )
+
+    response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data={
+            "merchant_id": "TEST-MERCHANT",
+            "m_payment_id": "SE-INVALID123",
+            "payment_status": "COMPLETE",
+            "amount_gross": "253.00",
+            "signature": "test-signature"
+        }
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Untrusted PayFast notification source"
+    )
+
+
+def test_payfast_itn_rejects_invalid_merchant_id(client, monkeypatch):
+    monkeypatch.setattr(
+        payment_endpoints.settings,
+        "PAYFAST_MERCHANT_ID",
+        "TEST-MERCHANT"
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_source_ip",
+        lambda source_ip: True
+    )
+
+    response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data={
+            "merchant_id": "WRONG-MERCHANT",
+            "m_payment_id": "SE-INVALID123",
+            "payment_status": "COMPLETE",
+            "amount_gross": "253.00",
+            "signature": "test-signature"
+        }
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "PayFast merchant ID mismatch"
+    )
+
+
+def test_payfast_itn_rejects_amount_mismatch(client, db, monkeypatch):
+    admin = create_test_staff(db, "ADMIN")
+    invoice_data = create_test_invoice(client, admin)
+    payment = create_pending_payment(db, invoice_data["id"])
+
+    payload = create_itn_payload(payment, "TEST-MERCHANT")
+    payload["amount_gross"] = "1.00"
+
+    monkeypatch.setattr(
+        payment_endpoints.settings,
+        "PAYFAST_MERCHANT_ID",
+        "TEST-MERCHANT"
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_source_ip",
+        lambda source_ip: True
+    )
+
+    response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data=payload
+    )
+
+    assert response.status_code == 400
+
+
+def test_payfast_itn_rejects_failed_server_validation(
+    client, db, monkeypatch
+):
+    admin = create_test_staff(db, "ADMIN")
+    invoice_data = create_test_invoice(client, admin)
+    payment = create_pending_payment(db, invoice_data["id"])
+
+    payload = create_itn_payload(payment, "TEST-MERCHANT")
+
+    monkeypatch.setattr(
+        payment_endpoints.settings,
+        "PAYFAST_MERCHANT_ID",
+        "TEST-MERCHANT"
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_source_ip",
+        lambda source_ip: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "validate_payfast_itn",
+        lambda data: False
+    )
+
+    response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data=payload
+    )
+
+    db.refresh(payment)
+
+    assert response.status_code == 400
+    assert payment.status == "PENDING"
+
+
+def test_payfast_itn_does_not_complete_failed_payment(
+    client, db, monkeypatch
+):
+    admin = create_test_staff(db, "ADMIN")
+    invoice_data = create_test_invoice(client, admin)
+    payment = create_pending_payment(db, invoice_data["id"])
+
+    payload = create_itn_payload(payment, "TEST-MERCHANT")
+    payload["payment_status"] = "FAILED"
+
+    monkeypatch.setattr(
+        payment_endpoints.settings,
+        "PAYFAST_MERCHANT_ID",
+        "TEST-MERCHANT"
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_source_ip",
+        lambda source_ip: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "validate_payfast_itn",
+        lambda data: True
+    )
+
+    response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data=payload
+    )
+
+    db.refresh(payment)
+    db.refresh(payment.invoice)
+
+    assert response.status_code == 200
+    assert payment.status == "PENDING"
+    assert payment.invoice.status != "PAID"
+
+
+def test_payfast_itn_handles_duplicate_notification(
+    client, db, monkeypatch
+):
+    admin = create_test_staff(db, "ADMIN")
+    invoice_data = create_test_invoice(client, admin)
+    payment = create_pending_payment(db, invoice_data["id"])
+
+    payload = create_itn_payload(payment, "TEST-MERCHANT")
+
+    monkeypatch.setattr(
+        payment_endpoints.settings,
+        "PAYFAST_MERCHANT_ID",
+        "TEST-MERCHANT"
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_itn_signature",
+        lambda data: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "verify_payfast_source_ip",
+        lambda source_ip: True
+    )
+    monkeypatch.setattr(
+        payment_endpoints,
+        "validate_payfast_itn",
+        lambda data: True
+    )
+
+    first_response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data=payload
+    )
+
+    second_response = client.post(
+        "/api/v1/payments/payfast/notify",
+        data=payload
+    )
+
+    db.refresh(payment)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert payment.status == "COMPLETED"
+    assert payment.payfast_transaction_id == payload["pf_payment_id"]
