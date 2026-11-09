@@ -8,6 +8,7 @@ from app.api.v1.endpoints import job_cards
 from app.api.v1.endpoints import job_assignments
 from app.api.v1.endpoints import technicians
 from app.api.v1.endpoints import service_bays
+from app.api.v1.endpoints import parts
 
 
 api_router = APIRouter()
@@ -19,6 +20,7 @@ api_router.include_router(job_cards.router)
 api_router.include_router(job_assignments.router)
 api_router.include_router(technicians.router)
 api_router.include_router(service_bays.router)
+api_router.include_router(parts.router)
 
 @api_router.get("/status")
 def api_status():
